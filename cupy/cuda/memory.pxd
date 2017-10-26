@@ -11,6 +11,7 @@ cdef class Chunk:
         public Chunk prev
         public Chunk next
         public bint in_use
+        object __weakref__
 
 cdef class MemoryPointer:
 
@@ -18,7 +19,9 @@ cdef class MemoryPointer:
         readonly device.Device device
         readonly object mem
         readonly size_t ptr
+        object __weakref__
 
+    cpdef update_ptr(self, size_t ptr)
     cpdef copy_from_device(self, MemoryPointer src, Py_ssize_t size)
     cpdef copy_from_device_async(self, MemoryPointer src, size_t size, stream)
     cpdef copy_from_host(self, mem, size_t size)
@@ -42,6 +45,7 @@ cdef class SingleDeviceMemoryPool:
     cdef:
         object _allocator
         dict _in_use
+        dict _in_use_memptr
         list _free
         object __weakref__
         object _weakref
@@ -66,7 +70,12 @@ cdef class SingleDeviceMemoryPool:
     cpdef void _grow_free_if_necessary(self, Py_ssize_t size)
     cpdef tuple _split(self, Chunk chunk, Py_ssize_t size)
     cpdef Chunk _merge(self, Chunk head, Chunk remaining)
-
+    cpdef classify_chunk_by_memptr(self)
+    cpdef compact_chunks(self, list chunk_list)
+    cpdef realloc(self, list chunk_list, Py_ssize_t size)
+    cpdef realloc_all(self, dict chunk_list_dict, Py_ssize_t max_size)
+    
+    
 cdef class MemoryPool:
 
     cdef:
