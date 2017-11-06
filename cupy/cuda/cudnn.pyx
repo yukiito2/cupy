@@ -188,6 +188,23 @@ cdef extern from "cupy_cudnn.h" nogil:
         TensorDescriptor srcDiffDesc, void* srcDiffData,
         TensorDescriptor destDesc, void* destData, void* beta,
         TensorDescriptor destDiffDesc, void* destDiffData)
+    
+    # Local Response Normalization
+    int cudnnCreateLRNDescriptor(LRNDescriptor* desc)
+    int cudnnSetLRNDescriptor(
+        LRNDescriptor normDesc, unsigned lrnN, 
+        double lrnAlpha, double lrnBeta, double lrnK)
+    int cudnnDestroyLRNDescriptor(LRNDescriptor normDesc)
+    int cudnnLRNCrossChannelForward(
+        Handle handle, LRNDescriptor normDesc, LRNMode mode,
+        void* alpha, TensorDescriptor xDesc, void* x, 
+        void* beta, TensorDescriptor yDesc, void* y)
+    int cudnnLRNCrossChannelBackward(
+        Handle handle, LRNDescriptor normDesc, LRNMode mode,
+        void* alpha, TensorDescriptor yDesc, void* y, 
+        TensorDescriptor dyDesc, void* dy,
+        TensorDescriptor xDesc, void* dx, 
+        void* beta, TensorDescriptor dxDesc, void* dx)
 
     # Batch Normalization
     int cudnnDeriveBNTensorDescriptor(
@@ -878,6 +895,56 @@ cpdef poolingBackward(
             <TensorDescriptor>srcDiffDesc, <void*>srcDiffData,
             <TensorDescriptor>destDesc, <void*>destData, <void*>beta,
             <TensorDescriptor>destDiffDesc, <void*>destDiffData)
+    check_status(status)
+    
+###############################################################################
+# Local Response Normalization
+###############################################################################
+
+cpdef size_t createLRNDescriptor() except *:
+    cdef LRNDescriptor desc
+    status = cudnnCreateLRNDescriptor(&desc)
+    check_status(status)
+    return <size_t>desc
+
+
+cpdef setLRNDescriptor(
+        size_t normDesc, unsigned lrnN, 
+        double lrnAlpha, double lrnBeta, double lrnK):
+    status = cudnnSetLRNDescriptor(
+        <LRNDescriptor>normDesc, lrnN, lrnAlpha, lrnBeta, lrnK)
+    check_status(status)
+
+
+cpdef destroyLRNDescriptor(size_t normDesc):
+    status = cudnnDestroyLRNDescriptor(<LRNDescriptor>normDesc)
+    check_status(status)
+
+
+cpdef LRNCrossChannelForward(
+        size_t handle, size_t normDesc, size_t mode, 
+        size_t alpha, size_t xDesc, size_t x, 
+        size_t beta, size_t yDesc, size_t y):
+    with nogil:
+        status = cudnnLRNCrossChannelForward(
+            <Handle>handle, <LRNDescriptor>normDesc, <LRNMode>mode,
+            <void*>alpha, <TensorDescriptor>xDesc, <void*>x, 
+            <void*>beta, <TensorDescriptor>yDesc, <void*>y)
+    check_status(status)
+
+
+cpdef LRNCrossChannelBackward(
+        size_t handle, size_t normDesc, size_t mode, 
+        size_t alpha, size_t yDesc, size_t y,
+        size_t dyDesc, size_t dy, size_t xDesc, size_t x,
+        size_t beta, size_t dxDesc, size_t dx):
+    with nogil:
+        status = cudnnLRNCrossChannelBackward(
+            <Handle>handle, <LRNDescriptor>normDesc, <LRNMode>mode,
+            <void*>alpha, <TensorDescriptor>yDesc, <void*>y,
+            <TensorDescriptor>dyDesc, <void*>dy, 
+            <TensorDescriptor>xDesc, <void*>x,
+            <void*>beta, <TensorDescriptor>dxDesc, <void*>dx)
     check_status(status)
 
 ###############################################################################
