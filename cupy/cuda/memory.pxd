@@ -1,3 +1,5 @@
+from libcpp cimport bool
+from libcpp cimport vector
 from cupy.cuda cimport device
 
 cdef class Chunk:
@@ -11,6 +13,7 @@ cdef class Chunk:
         public Chunk prev
         public Chunk next
         public bint in_use
+        object __weakref__
 
 cdef class MemoryPointer:
 
@@ -18,7 +21,9 @@ cdef class MemoryPointer:
         readonly device.Device device
         readonly object mem
         readonly size_t ptr
+        object __weakref__
 
+    cpdef update_ptr(self, size_t ptr)
     cpdef copy_from_device(self, MemoryPointer src, Py_ssize_t size)
     cpdef copy_from_device_async(self, MemoryPointer src, size_t size, stream)
     cpdef copy_from_host(self, mem, size_t size)
@@ -40,8 +45,12 @@ cpdef set_allocator(allocator=*)
 cdef class SingleDeviceMemoryPool:
 
     cdef:
+        bool profile_mode
+        list memory_log
+        list swapout_events
         object _allocator
         dict _in_use
+        dict _in_use_memptr
         list _free
         object __weakref__
         object _weakref
@@ -50,7 +59,14 @@ cdef class SingleDeviceMemoryPool:
         readonly Py_ssize_t _allocation_unit_size
         readonly Py_ssize_t _initial_bins_size
         readonly int _device_id
+        vector.vector[int] _index
 
+    cpdef set_profile_mode(self, bool flag)
+    cpdef get_profile_mode(self)
+    cpdef memory_log_reset(self)
+    cpdef memory_log_add(self, tuple x)
+    cpdef add_swapout_event(self, event)
+    cpdef list memory_log_get(self)
     cpdef MemoryPointer _alloc(self, Py_ssize_t size)
     cpdef MemoryPointer malloc(self, Py_ssize_t size)
     cpdef MemoryPointer _malloc(self, Py_ssize_t size)
@@ -62,16 +78,32 @@ cdef class SingleDeviceMemoryPool:
     cpdef free_bytes(self)
     cpdef total_bytes(self)
     cpdef Py_ssize_t _round_size(self, Py_ssize_t size)
+    """
     cpdef Py_ssize_t _bin_index_from_size(self, Py_ssize_t size)
     cpdef void _grow_free_if_necessary(self, Py_ssize_t size)
+    """
+    cpdef int _bin_index_from_size(self, Py_ssize_t size)
+    cpdef _append_to_free_list(self, Py_ssize_t size, chunk)
+    cpdef bint _remove_from_free_list(self, Py_ssize_t size, chunk) except *
     cpdef tuple _split(self, Chunk chunk, Py_ssize_t size)
     cpdef Chunk _merge(self, Chunk head, Chunk remaining)
-
+    cpdef classify_chunk_by_memptr(self)
+    cpdef compact_chunks(self, list chunk_list)
+    cpdef realloc(self, list chunk_list, Py_ssize_t size)
+    cpdef realloc_all(self, dict chunk_list_dict, Py_ssize_t max_size)
+    
+    
 cdef class MemoryPool:
 
     cdef:
         object _pools
 
+    cpdef set_profile_mode(self, bool flag)
+    cpdef get_profile_mode(self)
+    cpdef memory_log_reset(self)
+    cpdef memory_log_add(self, tuple x)
+    cpdef add_swapout_event(self, event)
+    cpdef list memory_log_get(self)
     cpdef MemoryPointer malloc(self, Py_ssize_t size)
     cpdef free_all_blocks(self)
     cpdef free_all_free(self)
