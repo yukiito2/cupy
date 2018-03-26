@@ -28,7 +28,6 @@ from cupy.cuda cimport memory
 
 DEF MAX_NDIM = 25
 
-
 @cython.profile(False)
 cdef inline _should_use_rop(x, y):
     xp = getattr(x, '__array_priority__', 0)
@@ -91,6 +90,7 @@ cdef class ndarray:
 
         if memptr is None:
             self.data = memory.alloc(self.size * self.dtype.itemsize)
+                
         else:
             self.data = memptr
         self.base = None
@@ -1754,7 +1754,10 @@ cdef class ndarray:
     cdef function.CPointer get_pointer(self):
         return CArray(self)
 
-    cpdef swapout(self, stream=None):
+    cpdef free_data(self):
+        self.data = None
+
+    cpdef swapout(self, stream=None, update=True):
         """Swaps out data from GPU device memory to HOST pinned memory
            Copied from anaruse's repository
            Source: https://github.com/anaruse/cupy/blob/OOC_cupy_v102/cupy/core/core.pyx
@@ -1764,15 +1767,16 @@ cdef class ndarray:
             return
 
         byte_size = self.size * self.dtype.itemsize
-        self.data_swapout = pinned_memory.alloc_pinned_memory(
-            byte_size)
+        if self.data_swapout is None:
+            self.data_swapout = pinned_memory.alloc_pinned_memory(byte_size)
+            update = True
 
-        if stream is None:
-            self.data_swapout.copy_from_device(self.data, byte_size)
-        else:
-            self.data_swapout.copy_from_device_async(self.data, byte_size,
-                                                     stream)
-
+        if update:
+            if stream is None:
+                self.data_swapout.copy_from_device(self.data, byte_size)
+            else:
+                self.data_swapout.copy_from_device_async(self.data, byte_size, stream)
+            
         self.data = None
         self.is_swapout = True
 
@@ -1784,17 +1788,17 @@ cdef class ndarray:
         if self.is_swapout is False:
             # data is on device memory. no need to swap in.
             return
-
+            
         byte_size = self.size * self.dtype.itemsize
         self.data = memory.alloc(byte_size)
-
+        
         if stream is None:
             self.data_swapout.copy_to_device(self.data, byte_size)
         else:
             self.data_swapout.copy_to_device_async(self.data, byte_size,
                                                    stream)
 
-        self.data_swapout = None
+        # self.data_swapout = None
         self.is_swapout = False
 
 cdef object newaxis = numpy.newaxis  # == None
