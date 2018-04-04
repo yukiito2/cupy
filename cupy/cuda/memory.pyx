@@ -76,6 +76,7 @@ class ManagedMemory(Memory):
         """(experimental) Prefetch memory.
         Args:
             stream (cupy.cuda.Stream): CUDA stream.
+
         """
         runtime.memPrefetchAsync(self.ptr, self.size, self.device.id,
                                  stream.ptr)
@@ -428,6 +429,7 @@ cdef class SingleDeviceMemoryPool:
         # cudaMalloc() is aligned to at least 512 bytes
         # cf. https://gist.github.com/sonots/41daaa6432b1c8b27ef782cd14064269
         self._allocation_unit_size = 512
+
         self._in_use = {}
         self._in_use_memptr = {}
         self._free = []
@@ -810,7 +812,6 @@ cdef class SingleDeviceMemoryPool:
             rlock.unlock_fastrlock(self._free_lock)
         return n
 
-    
     cpdef classify_chunk_by_memptr(self):
         cdef dict chunk_list_dict = {}
         cdef Chunk chunk
