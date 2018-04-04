@@ -1,8 +1,5 @@
-<<<<<<< HEAD
-=======
 from libcpp cimport bool
 from libcpp cimport vector
->>>>>>> 347cb9a... Add memory log functions
 from cupy.cuda cimport device
 
 cdef class Chunk:
