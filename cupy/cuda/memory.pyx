@@ -410,6 +410,10 @@ class PooledMemory(Memory):
                                               pmem_id=pmem_id)
             else:
                 pool.free(self.ptr, self.size)
+
+        if pool.get_profile_mode():
+            pool.memory_log_add(("free", self.size, str(self.ptr), str(id(self))))
+
         self.ptr = 0
         self.size = 0
         self.device = None
@@ -440,10 +444,12 @@ cdef class SingleDeviceMemoryPool:
         
         self.profile_mode = False
         self.memory_log = list()
+        self.swap_events = list()
+
+        self.swapout_tasks = list()
         
-        # ToDo
-        self.swapout_events = list()
-        self.malloc(15*1024*1024*1024)
+        _, total_device_memory = runtime.memGetInfo()
+        self.malloc(int(total_device_memory*95/100))
         
     cpdef set_profile_mode(self, bool flag):
         self.profile_mode = flag
@@ -456,36 +462,44 @@ cdef class SingleDeviceMemoryPool:
         
         if self.profile_mode:
             # compaction_all
-            chunk_list_dict = self.classify_chunk_by_memptr()
+            rlock.lock_fastrlock(self._in_use_lock, -1, True)
             try:
-                rlock.lock_fastrlock(self._in_use_lock, -1, True)
-                for memptr in chunk_list_dict.keys():
-                    chunk_list = chunk_list_dict[memptr]
-                    _, free_chunk = self.compact_chunks(chunk_list)
-                    if free_chunk is not None:
-                        self._append_to_free_list(free_chunk.size, free_chunk)
+                rlock.lock_fastrlock(self._free_lock, -1, True)
+                try:
+                    chunk_list_dict = self.classify_chunk_by_memptr()
+                    for memptr in chunk_list_dict.keys():
+                        chunk_list = chunk_list_dict[memptr]
+                        _, free_chunk = self.compact_chunks(chunk_list)
+                        if free_chunk is not None:
+                            self._append_to_free_list(free_chunk.size, free_chunk)
+                finally:
+                    rlock.unlock_fastrlock(self._free_lock)
             finally:
                 rlock.unlock_fastrlock(self._in_use_lock)
-        
+            gc.collect()       
+            
         self.memory_log = list()
+        self.swap_events = list()
         self.memory_log.append(("used_bytes", self.used_bytes()))
         
-        # ToDo
-        self.swapout_events = list()
+        self.swapout_tasks = list()
         
     cpdef memory_log_add(self, tuple x):
         self.memory_log.append(x)
     
-    cpdef list memory_log_get(self):
-        return list(self.memory_log)
+    cpdef tuple memory_log_get(self):
+        return list(self.memory_log), list(self.swap_events)
     
-    cpdef add_swapout_event(self, event):
-        while len(self.swapout_events) > 0:
-            if self.swapout_events[0].done is True:
-                self.swapout_events.pop(0)
+    cpdef add_swap_event(self, item):
+        self.swap_events.append(item)
+
+    cpdef add_swapout_task(self, event):
+        while len(self.swapout_tasks) > 0:
+            if self.swapout_tasks[0].done is True:
+                self.swapout_tasks.pop(0)
             else:
                 break
-        self.swapout_events.append(event)
+        self.swapout_tasks.append(event)
 
     cpdef Py_ssize_t _round_size(self, Py_ssize_t size):
         """Round up the memory size to fit memory alignment of cudaMalloc."""
@@ -660,9 +674,10 @@ cdef class SingleDeviceMemoryPool:
 
         # wait swap-out task
         if chunk is None:
-            while len(self.swapout_events) > 0:
-                swapout_event = self.swapout_events.pop(0)
-                swapout_event.synchronize()
+            while len(self.swapout_tasks) > 0:
+                #print("wait swap-out")
+                swapout_task = self.swapout_tasks.pop(0)
+                swapout_task.synchronize()
                 gc.collect()
 
                 rlock.lock_fastrlock(self._free_lock, -1, True)
@@ -681,7 +696,7 @@ cdef class SingleDeviceMemoryPool:
                     rlock.unlock_fastrlock(self._free_lock)    
                 if chunk is not None:
                     break
-                
+        
         if chunk is not None:
             chunk, remaining = self._split(chunk, size)
         else:
@@ -693,36 +708,49 @@ cdef class SingleDeviceMemoryPool:
                 runtime.deviceSynchronize()
                 if e.status != runtime.errorMemoryAllocation:
                     raise
-                    
-                chunk_list_dict = self.classify_chunk_by_memptr()  
-                
-                # check total free size per memptr
-                for memptr in chunk_list_dict.iterkeys():
-                    chunk_list = chunk_list_dict[memptr]
-                    chunk_list_free_size = 0
-                    
-                    for chunk_data in chunk_list:
-                        if chunk_data[1] is False:
-                            chunk_list_free_size += chunk_data[0].size
-
-                    if chunk_list_free_size >= size:
-                        # compaction and get free_chunk
-                        _, free_chunk = self.compact_chunks(chunk_list)
-                        chunk, remaining = self._split(free_chunk, size)
-                        break
+                rlock.lock_fastrlock(self._in_use_lock, -1, True)
+                try:
+                    rlock.lock_fastrlock(self._free_lock, -1, True)
+                    try:
+                        chunk_list_dict = self.classify_chunk_by_memptr()  
+                        
+                        # check total free size per memptr
+                        for memptr in chunk_list_dict.iterkeys():
+                            chunk_list = chunk_list_dict[memptr]
+                            chunk_list_free_size = 0
                             
+                            for chunk_data in chunk_list:
+                                if chunk_data[1] is False:
+                                    chunk_list_free_size += chunk_data[0].size
+
+                            if chunk_list_free_size >= size:
+                                # compaction and get free_chunk
+                                _, free_chunk = self.compact_chunks(chunk_list)
+                                chunk, remaining = self._split(free_chunk, size)
+                                break
+                    finally:
+                        rlock.unlock_fastrlock(self._free_lock)
+                finally:
+                    rlock.unlock_fastrlock(self._in_use_lock)
+        
                 if chunk is None:
                     self.free_all_blocks()
-                    chunk_list_dict = self.classify_chunk_by_memptr()
-                    
                     try:
                         mem = self._alloc(size).mem
                     except runtime.CUDARuntimeError as e:
                         if e.status != runtime.errorMemoryAllocation:
                             raise
                         
-                        self.realloc_all(chunk_list_dict, size)
-                        chunk_list_dict = self.classify_chunk_by_memptr()  
+                        rlock.lock_fastrlock(self._in_use_lock, -1, True)
+                        try: 
+                            rlock.lock_fastrlock(self._free_lock, -1, True)
+                            try:
+                                chunk_list_dict = self.classify_chunk_by_memptr()
+                                self.realloc_all(chunk_list_dict, size)
+                            finally:
+                                rlock.unlock_fastrlock(self._free_lock)
+                        finally:
+                            rlock.unlock_fastrlock(self._in_use_lock)
                                                  
                         gc.collect()
                         try:
@@ -747,7 +775,7 @@ cdef class SingleDeviceMemoryPool:
         self._in_use_memptr[chunk.ptr] = weakref.ref(memptr)
         
         if self.profile_mode:
-            self.memory_log_add(("malloc", size, str(chunk.ptr)))
+            self.memory_log_add(("malloc", size, str(chunk.ptr), str(id(pmem))))
         
         return memptr
 
@@ -756,8 +784,6 @@ cdef class SingleDeviceMemoryPool:
         cdef Chunk chunk
 
         #print("free: {}".format(size))
-        if self.profile_mode:
-            self.memory_log_add(("free", size, str(ptr)))
 
         rlock.lock_fastrlock(self._in_use_lock, -1, True)
         try:
@@ -816,28 +842,19 @@ cdef class SingleDeviceMemoryPool:
         cdef dict chunk_list_dict = {}
         cdef Chunk chunk
         
-        rlock.lock_fastrlock(self._in_use_lock, -1, True)
-        try:
-            for chunk in self._in_use.itervalues():
-                if chunk_list_dict.has_key(chunk.mem.ptr) is False:
-                    chunk_list_dict[chunk.mem.ptr] = list()
-                chunk_list_dict[chunk.mem.ptr].append((chunk, True))
+        for chunk in self._in_use.itervalues():
+            if chunk_list_dict.has_key(chunk.mem.ptr) is False:
+                chunk_list_dict[chunk.mem.ptr] = list()
+            chunk_list_dict[chunk.mem.ptr].append((chunk, True))
 
-        finally:
-            rlock.unlock_fastrlock(self._in_use_lock)
-        
-        rlock.lock_fastrlock(self._free_lock, -1, True)
-        try:
-            for i in range(len(self._free)):
-                free_list = self._free[i]
-                if free_list is not None:
-                    for chunk in free_list:
-                        if chunk_list_dict.has_key(chunk.mem.ptr) is False:
-                            chunk_list_dict[chunk.mem.ptr] = list()
-                        chunk_list_dict[chunk.mem.ptr].append((chunk, False))
-        finally:
-            rlock.unlock_fastrlock(self._free_lock)
-            
+        for i in range(len(self._free)):
+            free_list = self._free[i]
+            if free_list is not None:
+                for chunk in free_list:
+                    if chunk_list_dict.has_key(chunk.mem.ptr) is False:
+                        chunk_list_dict[chunk.mem.ptr] = list()
+                    chunk_list_dict[chunk.mem.ptr].append((chunk, False))
+           
         for memptr in chunk_list_dict.iterkeys():
             chunk_list_dict[memptr].sort(key=compare_chunk_data)
         
@@ -857,75 +874,64 @@ cdef class SingleDeviceMemoryPool:
         
         print("compaction")
         
-        try:
-            rlock.lock_fastrlock(self._in_use_lock, -1, True)
-            try:
-                rlock.lock_fastrlock(self._free_lock, -1, True)
+        while len(chunk_list) != 0:
+            chunk_data = chunk_list.pop(0)
+            chunk = chunk_data[0]
+            chunk_is_used = chunk_data[1] #True->used, False->free
+            
+            if chunk_is_used:
+                cpy_size += chunk.size
                 
-                while len(chunk_list) != 0:
-                    chunk_data = chunk_list.pop(0)
-                    chunk = chunk_data[0]
-                    chunk_is_used = chunk_data[1] #True->used, False->free
-                    
-                    if chunk_is_used:
-                        cpy_size += chunk.size
-                        
-                        # create new used_chunk
-                        current_chunk = Chunk(chunk.mem, chunk.offset-compaction_offset, chunk.size)
-                        if prev_chunk is not None:
-                            current_chunk.prev = prev_chunk
-                            prev_chunk.next = current_chunk
-                        else:
-                            current_chunk.prev = None
-                        prev_chunk = current_chunk
-                        new_chunk_list.append((current_chunk, True))
-                        
-                        # updata "_in_use" and "_in_use_memptr"
-                        del self._in_use[chunk.ptr]
-                        self._in_use[current_chunk.ptr] = current_chunk
-                        memptr = self._in_use_memptr.pop(chunk.ptr, None)()
-                        memptr.mem.ptr = current_chunk.ptr
-                        memptr.update_ptr(current_chunk.ptr)
-                        self._in_use_memptr[current_chunk.ptr] = weakref.ref(memptr)
-                        
-                    else:
-                        if compaction_offset > 0:
-                            buffer_size = src_ptr - dst_ptr
-                            if buffer_size > cpy_size:
-                                buffer_size = cpy_size
-                            runtime.memcpy(dst_ptr, src_ptr, buffer_size, runtime.memcpyDeviceToDevice)
-                            runtime.memcpy(src_ptr, src_ptr+buffer_size, cpy_size-buffer_size, runtime.memcpyDeviceToDevice)
-                        
-                        cpy_size = 0
-                        compaction_offset += chunk.size
-                        src_ptr = chunk.ptr + chunk.size
-                        dst_ptr = src_ptr - compaction_offset
-                        
-                        # updata "_free"
-                        self._remove_from_free_list(chunk.size, chunk)
+                # create new used_chunk
+                current_chunk = Chunk(chunk.mem, chunk.offset-compaction_offset, chunk.size)
+                if prev_chunk is not None:
+                    current_chunk.prev = prev_chunk
+                    prev_chunk.next = current_chunk
+                else:
+                    current_chunk.prev = None
+                prev_chunk = current_chunk
+                new_chunk_list.append((current_chunk, True))
                 
-                # copy chunks in last partition
-                if cpy_size > 0 and compaction_offset > 0:
+                # updata "_in_use" and "_in_use_memptr"
+                memptr = self._in_use_memptr.pop(chunk.ptr, None)()
+                memptr.mem.ptr = current_chunk.ptr
+                memptr.update_ptr(current_chunk.ptr)
+                self._in_use_memptr[current_chunk.ptr] = weakref.ref(memptr)
+                del self._in_use[chunk.ptr] 
+                self._in_use[current_chunk.ptr] = current_chunk
+            else:
+                if compaction_offset > 0:
                     buffer_size = src_ptr - dst_ptr
                     if buffer_size > cpy_size:
                         buffer_size = cpy_size
                     runtime.memcpy(dst_ptr, src_ptr, buffer_size, runtime.memcpyDeviceToDevice)
                     runtime.memcpy(src_ptr, src_ptr+buffer_size, cpy_size-buffer_size, runtime.memcpyDeviceToDevice)
-                    
-                # create new free_chunk
-                if compaction_offset > 0:
-                    free_chunk = Chunk(chunk.mem, chunk.mem.size-compaction_offset, compaction_offset)
-                    if prev_chunk is not None:
-                        free_chunk.prev = prev_chunk
-                        prev_chunk.next = free_chunk
-                    else:
-                        free_chunk.prev = None
-                    new_chunk_list.append((free_chunk, False))
-                        
-            finally:
-                rlock.unlock_fastrlock(self._free_lock)
-        finally:
-            rlock.unlock_fastrlock(self._in_use_lock)
+                
+                cpy_size = 0
+                compaction_offset += chunk.size
+                src_ptr = chunk.ptr + chunk.size
+                dst_ptr = src_ptr - compaction_offset
+                
+                # updata "_free"
+                self._remove_from_free_list(chunk.size, chunk)
+        
+        # copy chunks in last partition
+        if cpy_size > 0 and compaction_offset > 0:
+            buffer_size = src_ptr - dst_ptr
+            if buffer_size > cpy_size:
+                buffer_size = cpy_size
+            runtime.memcpy(dst_ptr, src_ptr, buffer_size, runtime.memcpyDeviceToDevice)
+            runtime.memcpy(src_ptr, src_ptr+buffer_size, cpy_size-buffer_size, runtime.memcpyDeviceToDevice)
+            
+        # create new free_chunk
+        if compaction_offset > 0:
+            free_chunk = Chunk(chunk.mem, chunk.mem.size-compaction_offset, compaction_offset)
+            if prev_chunk is not None:
+                free_chunk.prev = prev_chunk
+                prev_chunk.next = free_chunk
+            else:
+                free_chunk.prev = None
+            new_chunk_list.append((free_chunk, False))
         
         return new_chunk_list, free_chunk
     
@@ -975,35 +981,29 @@ cdef class SingleDeviceMemoryPool:
                 prev_chunk = current_chunk
 
                 # updata "_in_use" and "_in_use_memptr"
-                del self._in_use[chunk.ptr]
-                self._in_use[current_chunk.ptr] = current_chunk
                 memptr = self._in_use_memptr.pop(chunk.ptr, None)()
                 memptr.mem.ptr = current_chunk.ptr
                 memptr.update_ptr(current_chunk.ptr)
                 self._in_use_memptr[current_chunk.ptr] = weakref.ref(memptr)
+                del self._in_use[chunk.ptr]
+                self._in_use[current_chunk.ptr] = current_chunk
 
     cpdef realloc_all(self, dict chunk_list_dict, Py_ssize_t max_size):
         cdef list new_chunk_list = None
         cdef Chunk free_chunk = None
         cdef Py_ssize_t total_free_size = 0
-        
-        try:
-            rlock.lock_fastrlock(self._in_use_lock, -1, True)
-              
-            for memptr in chunk_list_dict.keys():
-                chunk_list = chunk_list_dict[memptr]
-                new_chunk_list, free_chunk = self.compact_chunks(chunk_list)
+           
+        for memptr in chunk_list_dict.keys():
+            chunk_list = chunk_list_dict[memptr]
+            new_chunk_list, free_chunk = self.compact_chunks(chunk_list)
+            
+            realloc_size = new_chunk_list[0][0].mem.size
+            
+            if free_chunk is not None:
+                realloc_size -= free_chunk.size
+                total_free_size += free_chunk.size
                 
-                realloc_size = new_chunk_list[0][0].mem.size
-                
-                if free_chunk is not None:
-                    realloc_size -= free_chunk.size
-                    total_free_size += free_chunk.size
-                    
-                    self.realloc(new_chunk_list, realloc_size)
-
-        finally:
-            rlock.unlock_fastrlock(self._in_use_lock)
+                self.realloc(new_chunk_list, realloc_size)
 
     cpdef used_bytes(self):
         cdef Py_ssize_t size = 0
@@ -1077,14 +1077,10 @@ cdef class MemoryPool(object):
         mp = <SingleDeviceMemoryPool>self._pools[device.get_device_id()]
         mp.memory_log_add(x)
     
-    cpdef list memory_log_get(self):
+    cpdef tuple memory_log_get(self):
         mp = <SingleDeviceMemoryPool>self._pools[device.get_device_id()]
         return mp.memory_log_get()
-        
-    cpdef add_swapout_event(self, event):
-        mp = <SingleDeviceMemoryPool>self._pools[device.get_device_id()]
-        mp.add_swapout_event(event)
-
+     
     cpdef MemoryPointer malloc(self, Py_ssize_t size):
         """Allocates the memory, from the pool if possible.
         This method can be used as a CuPy memory allocator. The simplest way to

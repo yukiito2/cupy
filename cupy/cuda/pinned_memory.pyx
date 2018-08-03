@@ -13,12 +13,9 @@ from cupy.cuda cimport memory
 cdef class PinnedMemory:
 
     """Pinned memory allocation on host.
-
     This class provides a RAII interface of the pinned memory allocation.
-
     Args:
         size (int): Size of the memory allocation in bytes.
-
     """
 
     def __init__(self, Py_ssize_t size, unsigned int flags=0):
@@ -39,15 +36,12 @@ cdef class PinnedMemory:
 cdef class PinnedMemoryPointer:
 
     """Pointer of a pinned memory.
-
     An instance of this class holds a reference to the original memory buffer
     and a pointer to a place within this buffer.
-
     Args:
         mem (PinnedMemory): The device memory buffer.
         offset (int): An offset from the head of the buffer to the place this
             pointer refers.
-
     Attributes:
         mem (PinnedMemory): The device memory buffer.
         ptr (int): Pointer to the place within the buffer.
@@ -91,7 +85,6 @@ cdef class PinnedMemoryPointer:
         """Copies data from src (device memory) to self (pinned memory).
         Copied from anaruse's repository
         Source: https://github.com/anaruse/cupy/blob/OOC_cupy_v102/cupy/cuda/pinned_memory.pyx
-
         Args:
             src (cupy.cuda.MemoryPointer): Source memory pointer.
             size (int): Size of data in bytes.
@@ -106,7 +99,6 @@ cdef class PinnedMemoryPointer:
         asynchronously.
         Copied from anaruse's repository
         Source: https://github.com/anaruse/cupy/blob/OOC_cupy_v102/cupy/cuda/pinned_memory.pyx
-
         Args:
             src (cupy.cuda.MemoryPointer): Source memory pointer.
             size (int): Size of data in bytes.
@@ -120,7 +112,6 @@ cdef class PinnedMemoryPointer:
         """Copies data from self (pinned memory) to dst (device memory).
         Copied from anaruse's repository
         Source: https://github.com/anaruse/cupy/blob/OOC_cupy_v102/cupy/cuda/pinned_memory.pyx
-
         Args:
             dst (cupy.cuda.MemoryPointer): Destination memory pointer.
             size (int): Size of data in bytes.
@@ -135,7 +126,6 @@ cdef class PinnedMemoryPointer:
         asynchronously.
         Copied from anaruse's repository
         Source: https://github.com/anaruse/cupy/blob/OOC_cupy_v102/cupy/cuda/pinned_memory.pyx
-
         Args:
             dst (cupy.cuda.MemoryPointer): Destination memory pointer.
             size (int): Size of data in bytes.
@@ -197,9 +187,7 @@ cdef class _EventWatcher:
 
     cpdef add(self, event, obj):
         """ Add event to be monitored.
-
         The ``obj`` are automatically released when the event done.
-
         Args:
             event (cupy.cuda.Event): The CUDA event to be monitored.
             obj: The object to be held.
@@ -212,7 +200,6 @@ cdef class _EventWatcher:
 
     cpdef check_and_release(self):
         """ Check and release completed events.
-
         """
         if not self.events:
             return
@@ -235,9 +222,7 @@ cdef _EventWatcher _watcher = _EventWatcher()
 
 cpdef _add_to_watch_list(event, obj):
     """ Add event to be monitored.
-
     The ``obj`` are automatically released when the event done.
-
     Args:
         event (cupy.cuda.Event): The CUDA event to be monitored.
         obj: The object to be held.
@@ -247,16 +232,12 @@ cpdef _add_to_watch_list(event, obj):
 
 cpdef PinnedMemoryPointer alloc_pinned_memory(Py_ssize_t size):
     """Calls the current allocator.
-
     Use :func:`~cupy.cuda.set_pinned_memory_allocator` to change the current
     allocator.
-
     Args:
         size (int): Size of the memory allocation.
-
     Returns:
         ~cupy.cuda.PinnedMemoryPointer: Pointer to the allocated buffer.
-
     """
     _watcher.check_and_release()
     return _current_allocator(size)
@@ -264,13 +245,11 @@ cpdef PinnedMemoryPointer alloc_pinned_memory(Py_ssize_t size):
 
 cpdef set_pinned_memory_allocator(allocator=_malloc):
     """Sets the current allocator.
-
     Args:
         allocator (function): CuPy pinned memory allocator. It must have the
             same interface as the :func:`cupy.cuda.alloc_alloc_pinned_memory`
             function, which takes the buffer size as an argument and returns
             the device buffer of that size.
-
     """
     global _current_allocator
     _current_allocator = allocator
@@ -279,10 +258,8 @@ cpdef set_pinned_memory_allocator(allocator=_malloc):
 cdef class PooledPinnedMemory(PinnedMemory):
 
     """Memory allocation for a memory pool.
-
     As the instance of this class is created by memory pool allocator, users
     should not instantiate it manually.
-
     """
 
     def __init__(self, PinnedMemory mem, pool):
@@ -296,10 +273,8 @@ cdef class PooledPinnedMemory(PinnedMemory):
 
     cpdef free(self):
         """Releases the memory buffer and sends it to the memory pool.
-
         This function actually does not free the buffer. It just returns the
         buffer to the memory pool for reuse.
-
         """
         pool = self.pool()
         if pool and self.ptr != 0:
@@ -311,17 +286,14 @@ cdef class PooledPinnedMemory(PinnedMemory):
 cdef class PinnedMemoryPool:
 
     """Memory pool on the host.
-
     Note that it preserves all allocated memory buffers even if the user
     explicitly release the one. Those released memory buffers are held by the
     memory pool as *free blocks*, and reused for further memory allocations of
     the same size.
-
     Args:
         allocator (function): The base CuPy pinned memory allocator. It is
             used for allocating new blocks when the blocks of the required
             size are all in use.
-
     """
 
     def __init__(self, allocator=_malloc):
@@ -372,7 +344,6 @@ cdef class PinnedMemoryPool:
 
     cpdef n_free_blocks(self):
         """Count the total number of free blocks.
-
         Returns:
             int: The total number of free blocks.
         """

@@ -1765,17 +1765,29 @@ cdef class ndarray:
         if self.is_swapout is True:
             # data is on pinned memory. no need to swap out.
             return
-
+        
         byte_size = self.size * self.dtype.itemsize
-        if self.data_swapout is None:
-            self.data_swapout = pinned_memory.alloc_pinned_memory(byte_size)
-            update = True
+        self.data_swapout = pinned_memory.alloc_pinned_memory(byte_size)
+           
+        pool = self.data.mem.pool()
+        while len(pool.swapout_tasks) > 0 and pool.swapout_tasks[0].done:
+            pool.swapout_tasks.pop(0)
+        
+        if stream is None:
+            self.data_swapout.copy_from_device(self.data, byte_size)
+        else:
+            if pool.get_profile_mode():
+                if len(pool.swap_events) == 0 or pool.swap_events[-1][1].done:
+                    start_event = stream.record()
+                else:
+                    start_event = pool.swap_events[-1][1]
 
-        if update:
-            if stream is None:
-                self.data_swapout.copy_from_device(self.data, byte_size)
-            else:
-                self.data_swapout.copy_from_device_async(self.data, byte_size, stream)
+            self.data_swapout.copy_from_device_async(self.data, byte_size, stream)
+
+            end_event = stream.record()
+            pool.swapout_tasks.append(end_event)
+            if pool.get_profile_mode() and stream is not None:
+                pool.swap_events.append((start_event, end_event))
             
         self.data = None
         self.is_swapout = True
@@ -1792,11 +1804,24 @@ cdef class ndarray:
         byte_size = self.size * self.dtype.itemsize
         self.data = memory.alloc(byte_size)
         
+        pool = self.data.mem.pool()
+        while len(pool.swapout_tasks) > 0 and pool.swapout_tasks[0].done:
+            pool.swapout_tasks.pop(0)
+        
         if stream is None:
             self.data_swapout.copy_to_device(self.data, byte_size)
         else:
-            self.data_swapout.copy_to_device_async(self.data, byte_size,
-                                                   stream)
+            if pool.get_profile_mode():
+                if len(pool.swap_events) == 0 or pool.swap_events[-1][1].done:
+                    start_event = stream.record()
+                else:
+                    start_event = pool.swap_events[-1][1]
+
+            self.data_swapout.copy_to_device_async(self.data, byte_size, stream)
+
+            if pool.get_profile_mode():
+                end_event = stream.record()
+                pool.swap_events.append((start_event, end_event))
 
         # self.data_swapout = None
         self.is_swapout = False

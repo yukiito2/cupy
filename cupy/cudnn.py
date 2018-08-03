@@ -138,7 +138,8 @@ def create_filter_descriptor(arr, format=cudnn.CUDNN_TENSOR_NCHW):
 def create_convolution_descriptor(pad, stride, dtype,
                                   mode=cudnn.CUDNN_CROSS_CORRELATION,
                                   dilation=(1, 1),
-                                  use_tensor_core=False):
+                                  use_tensor_core=False,
+                                  groups=1):
     desc = Descriptor(cudnn.createConvolutionDescriptor(),
                       cudnn.destroyConvolutionDescriptor)
     ndim = len(pad)
@@ -163,6 +164,10 @@ def create_convolution_descriptor(pad, stride, dtype,
                 if use_tensor_core:
                     math_type = cudnn.CUDNN_TENSOR_OP_MATH
                     cudnn.setConvolutionMathType(desc.value, math_type)
+                if groups > 1:
+                    cudnn.setConvolutionGroupCount(desc.value, groups)
+            elif groups > 1:
+                raise ValueError('groups must be one when cuDNN < 7.0')
         else:
             cudnn.setConvolution2dDescriptor_v4(
                 desc.value, pad[0], pad[1], stride[0], stride[1], 1, 1, mode)

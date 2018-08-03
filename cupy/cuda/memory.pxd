@@ -47,7 +47,6 @@ cdef class SingleDeviceMemoryPool:
     cdef:
         bool profile_mode
         list memory_log
-        list swapout_events
         object _allocator
         dict _in_use
         dict _in_use_memptr
@@ -61,12 +60,14 @@ cdef class SingleDeviceMemoryPool:
         readonly int _device_id
         vector.vector[int] _index
 
+    cdef public list swap_events
+    cdef public list swapout_tasks
+
     cpdef set_profile_mode(self, bool flag)
     cpdef get_profile_mode(self)
     cpdef memory_log_reset(self)
     cpdef memory_log_add(self, tuple x)
-    cpdef add_swapout_event(self, event)
-    cpdef list memory_log_get(self)
+    cpdef tuple memory_log_get(self)
     cpdef MemoryPointer _alloc(self, Py_ssize_t size)
     cpdef MemoryPointer malloc(self, Py_ssize_t size)
     cpdef MemoryPointer _malloc(self, Py_ssize_t size)
@@ -87,7 +88,8 @@ cdef class SingleDeviceMemoryPool:
     cpdef compact_chunks(self, list chunk_list)
     cpdef realloc(self, list chunk_list, Py_ssize_t size)
     cpdef realloc_all(self, dict chunk_list_dict, Py_ssize_t max_size)
-    
+    cpdef add_swap_event(self, item)
+    cpdef add_swapout_task(self, event)
     
 cdef class MemoryPool:
 
@@ -98,8 +100,7 @@ cdef class MemoryPool:
     cpdef get_profile_mode(self)
     cpdef memory_log_reset(self)
     cpdef memory_log_add(self, tuple x)
-    cpdef add_swapout_event(self, event)
-    cpdef list memory_log_get(self)
+    cpdef tuple memory_log_get(self)
     cpdef MemoryPointer malloc(self, Py_ssize_t size)
     cpdef free_all_blocks(self)
     cpdef free_all_free(self)
