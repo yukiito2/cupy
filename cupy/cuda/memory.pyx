@@ -462,9 +462,9 @@ cdef class SingleDeviceMemoryPool:
         
         if self.profile_mode:
             # compaction_all
-            rlock.lock_fastrlock(self._in_use_lock, -1, True)
+            rlock.lock_fastrlock(self._free_lock, -1, True)
             try:
-                rlock.lock_fastrlock(self._free_lock, -1, True)
+                rlock.lock_fastrlock(self._in_use_lock, -1, True)
                 try:
                     chunk_list_dict = self.classify_chunk_by_memptr()
                     for memptr in chunk_list_dict.keys():
@@ -473,9 +473,9 @@ cdef class SingleDeviceMemoryPool:
                         if free_chunk is not None:
                             self._append_to_free_list(free_chunk.size, free_chunk)
                 finally:
-                    rlock.unlock_fastrlock(self._free_lock)
+                    rlock.unlock_fastrlock(self._in_use_lock)
             finally:
-                rlock.unlock_fastrlock(self._in_use_lock)
+                rlock.unlock_fastrlock(self._free_lock)
             gc.collect()       
             
         self.memory_log = list()
@@ -708,9 +708,9 @@ cdef class SingleDeviceMemoryPool:
                 runtime.deviceSynchronize()
                 if e.status != runtime.errorMemoryAllocation:
                     raise
-                rlock.lock_fastrlock(self._in_use_lock, -1, True)
+                rlock.lock_fastrlock(self._free_lock, -1, True)
                 try:
-                    rlock.lock_fastrlock(self._free_lock, -1, True)
+                    rlock.lock_fastrlock(self._in_use_lock, -1, True)
                     try:
                         chunk_list_dict = self.classify_chunk_by_memptr()  
                         
@@ -729,9 +729,9 @@ cdef class SingleDeviceMemoryPool:
                                 chunk, remaining = self._split(free_chunk, size)
                                 break
                     finally:
-                        rlock.unlock_fastrlock(self._free_lock)
+                        rlock.unlock_fastrlock(self._in_use_lock)
                 finally:
-                    rlock.unlock_fastrlock(self._in_use_lock)
+                    rlock.unlock_fastrlock(self._free_lock)
         
                 if chunk is None:
                     self.free_all_blocks()
@@ -741,16 +741,16 @@ cdef class SingleDeviceMemoryPool:
                         if e.status != runtime.errorMemoryAllocation:
                             raise
                         
-                        rlock.lock_fastrlock(self._in_use_lock, -1, True)
+                        rlock.lock_fastrlock(self._free_lock, -1, True)
                         try: 
-                            rlock.lock_fastrlock(self._free_lock, -1, True)
+                            rlock.lock_fastrlock(self._in_use_lock, -1, True)
                             try:
                                 chunk_list_dict = self.classify_chunk_by_memptr()
                                 self.realloc_all(chunk_list_dict, size)
                             finally:
-                                rlock.unlock_fastrlock(self._free_lock)
+                                rlock.unlock_fastrlock(self._in_use_lock)
                         finally:
-                            rlock.unlock_fastrlock(self._in_use_lock)
+                            rlock.unlock_fastrlock(self._free_lock)
                                                  
                         gc.collect()
                         try:
