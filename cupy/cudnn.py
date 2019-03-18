@@ -23,7 +23,8 @@ def get_handle():
     handle = cudnn.create()
     _handles[dev] = handle
     return handle
-
+# Get handle, all of first
+get_handle()
 
 @atexit.register
 def reset_handles():

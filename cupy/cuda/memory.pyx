@@ -411,8 +411,7 @@ class PooledMemory(Memory):
             else:
                 pool.free(self.ptr, self.size)
 
-        if pool.get_profile_mode():
-            pool.memory_log_add(("free", self.size, str(self.ptr), str(id(self))))
+        pool.memory_log_add(("free", self.size, str(self.ptr), str(id(self))))
 
         self.ptr = 0
         self.size = 0
@@ -449,7 +448,7 @@ cdef class SingleDeviceMemoryPool:
         self.swapout_tasks = list()
         
         _, total_device_memory = runtime.memGetInfo()
-        self.malloc(int(total_device_memory*95/100))
+        self.malloc(int(total_device_memory*93/100))
         
     cpdef set_profile_mode(self, bool flag):
         self.profile_mode = flag
@@ -774,8 +773,7 @@ cdef class SingleDeviceMemoryPool:
         memptr = MemoryPointer(pmem, 0)
         self._in_use_memptr[chunk.ptr] = weakref.ref(memptr)
         
-        if self.profile_mode:
-            self.memory_log_add(("malloc", size, str(chunk.ptr), str(id(pmem))))
+        self.memory_log_add(("malloc", size, str(chunk.ptr), str(id(pmem))))
         
         return memptr
 
@@ -872,7 +870,7 @@ cdef class SingleDeviceMemoryPool:
         cdef Chunk current_chunk = None
         cdef Chunk prev_chunk = None
         
-        print("compaction")
+        #print("compaction")
         
         while len(chunk_list) != 0:
             chunk_data = chunk_list.pop(0)
